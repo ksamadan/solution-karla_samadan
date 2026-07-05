@@ -8,7 +8,13 @@ run:
 	uvicorn src.main:app --reload
 
 test:
-	pytest
+	PYTHONPATH=. pytest
+
+lint:
+	ruff check src tests
+
+format:
+	ruff format src tests
 
 docker-build:
 	docker build -t tickethub .
