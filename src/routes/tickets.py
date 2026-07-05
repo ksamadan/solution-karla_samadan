@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.encoders import jsonable_encoder
+
+from src.cache import delete_cache_pattern, get_cache, set_cache
 
 from src.database import get_db
 from src.external import fetch_external_tickets
@@ -55,6 +58,19 @@ async def get_tickets(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (
+        f"tickets:"
+        f"status={status_filter}:"
+        f"priority={priority}:"
+        f"limit={limit}:"
+        f"offset={offset}"
+    )
+
+    cached_tickets = await get_cache(cache_key)
+
+    if cached_tickets is not None:
+        return cached_tickets
+
     query = select(Ticket)
 
     if status_filter is not None:
@@ -68,7 +84,15 @@ async def get_tickets(
     result = await db.execute(query)
     tickets = result.scalars().all()
 
-    return [to_list_item(ticket) for ticket in tickets]
+    response = [to_list_item(ticket) for ticket in tickets]
+
+    await set_cache(
+        cache_key,
+        jsonable_encoder(response),
+        expire_seconds=60,
+    )
+
+    return response
 
 @router.get("/search", response_model=list[TicketListItem])
 async def search_tickets(
@@ -122,6 +146,8 @@ async def create_ticket(
     db.add(ticket)
     await db.commit()
     await db.refresh(ticket)
+    await delete_cache_pattern("tickets:*")
+    await delete_cache_pattern("stats:*")
 
     return ticket
 
@@ -146,6 +172,8 @@ async def update_ticket(
 
     await db.commit()
     await db.refresh(ticket)
+    await delete_cache_pattern("tickets:*")
+    await delete_cache_pattern("stats:*")
 
     return ticket
 
@@ -210,6 +238,8 @@ async def sync_tickets(
             updated += 1
 
     await db.commit()
+    await delete_cache_pattern("tickets:*")
+    await delete_cache_pattern("stats:*")
 
     return {
         "message": "Sync completed",
